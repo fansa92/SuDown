@@ -1,0 +1,31 @@
+# .NET build output
+bin/
+obj/
+publish/
+[Bb]uild/
+[Dd]ist/
+*.user
+*.suo
+*.userosscache
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# Logs and test artifacts
+*.log
+test_*.bin
+1048576
+downloads/
+
+# Local backups
+*.bak
+
+# Session files may contain cookies / credentials
+*.session.json
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
