@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release 版本号，必须带 v 前缀，例如 v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+            pack: zip
+          - rid: win-arm64
+            os: windows-latest
+            pack: zip
+          - rid: linux-x64
+            os: ubuntu-latest
+            pack: tar
+          - rid: linux-arm64
+            os: ubuntu-latest
+            pack: tar
+          - rid: osx-x64
+            os: macos-latest
+            pack: tar
+          - rid: osx-arm64
+            os: macos-latest
+            pack: tar
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_TAG}" ]; then
+            echo "无法确定版本号" >&2
+            exit 1
+          fi
+          echo "tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "构建版本：${RELEASE_TAG#v}"
+
+      - name: Publish single file
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          dotnet publish SuDown.csproj \
+            -c Release \
+            -r "$RID" \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=none \
+            -p:Version="$VERSION" \
+            -o "out/$RID"
+          ls -la "out/$RID"
+
+      - name: Package (Windows)
+        if: matrix.pack == 'zip'
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "out/$env:RID/su.exe" -DestinationPath "dist/su-$env:RID.zip" -CompressionLevel Optimal
+
+      - name: Package (Linux / macOS)
+        if: matrix.pack == 'tar'
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          chmod +x "out/$RID/su"
+          tar -czf "dist/su-$RID.tar.gz" -C "out/$RID" su
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: su-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: SuDown ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
